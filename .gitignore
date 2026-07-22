@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Data files - belong in S3, not Git
+*.csv
+!smoke_test.csv

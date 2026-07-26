@@ -46,6 +46,22 @@ goes in the Parking Lot until the core slice is done and demoable.
 - Empty result ≠ error — different diagnoses
 - Why raw layer is all-VARCHAR
 
+### Day 1 — 2026-07-26: Real dataset loaded
+
+- Lending Club accepted loans downloaded, inspected before upload
+  (374MB gzipped, 2,260,701 rows, 151 columns)
+- Uploaded to S3 under `raw/lending_club/` prefix convention
+- 151-column DDL generated from the file's own header, not hand-typed
+- Named file format object — quoting settings handle `desc` free text
+- `COPY INTO` with `ON_ERROR = ABORT_STATEMENT`: 2,260,701 parsed,
+  2,260,701 loaded, 0 rejected, 52 seconds
+- Validated independently: row count matches local `wc -l` minus header,
+  `id` confirmed unique, column alignment spot-checked
+
+**Concepts:** parallelism and why gzip is single-threaded, file format objects,
+CSV quoting, reserved keywords needing double quotes, memory vs disk,
+git staging semantics
+
 ---
 
 ## Next 7 Days

@@ -223,3 +223,8 @@ __marimo__/
 
 # Personal study notes - not for public repo
 INTERVIEW_ANSWERS.md
+# dbt generated output
+target/
+logs/
+dbt_packages/
+.user.yml

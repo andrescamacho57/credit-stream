@@ -9,3 +9,4 @@ CREATE OR REPLACE FILE FORMAT credit_stream.raw.ff_lending_club_csv
   NULL_IF = ('', 'NULL', 'null', 'n/a')
   EMPTY_FIELD_AS_NULL = TRUE
   COMMENT = 'Lending Club CSV. Quoted fields required - desc column is free text with embedded commas and newlines.';
+

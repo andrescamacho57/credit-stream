@@ -62,6 +62,26 @@ goes in the Parking Lot until the core slice is done and demoable.
 CSV quoting, reserved keywords needing double quotes, memory vs disk,
 git staging semantics
 
+
+### Day 2 — 2026-07-26: dbt connected
+
+- Discovered installed dbt was Fusion 2.0 (Rust), not dbt-core 1.x — chose Fusion
+  deliberately after weighing preview risk vs. currency
+- Updated Fusion binary to preview.202
+- Key pair authentication: generated RSA 2048 keypair, registered public key on
+  Snowflake user, verified via RSA_PUBLIC_KEY_FP
+- Chose key pair over password because Snowflake is deprecating single-factor auth
+  and a CI runner cannot type an MFA code
+- profiles.yml written by hand with private_key_path, no password anywhere
+- `dbt debug` — all checks passed
+- Stripped jaffle-shop sample scaffold, renamed project folder to dbt/
+- `dbt deps` installed dbt_utils 1.4.1 — package ecosystem confirmed working on Fusion
+
+**Concepts:** compiled vs interpreted, adapters, YAML, public key cryptography,
+file permissions, hidden config directories, credential hygiene
+
+
+
 ---
 
 ## Next 7 Days

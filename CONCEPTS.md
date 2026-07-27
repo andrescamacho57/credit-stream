@@ -354,3 +354,162 @@ entirely null, and `desc` as free text with embedded commas and newlines.
 
 **Already cleaned by the uploader:** `int_rate` and `revol_util` had percent signs
 stripped and were converted to floats — so that particular mess isn't present.
+
+---
+
+## Compiled vs Interpreted (and why dbt changed)
+
+**Interpreted language (Python):** the source code is read and executed line by line
+at runtime by an interpreter. To run a Python program you need Python installed,
+plus the program's packages, plus all of *their* dependencies. Those dependencies
+can collide between projects — which is the entire reason virtual environments exist.
+
+**Compiled language (Rust, Go, C):** source is translated ahead of time into machine
+code the CPU runs directly. The result is a **binary** — one self-contained
+executable file with everything baked in.
+
+**Why this mattered here:** dbt-core 1.x is Python — `pip install`, virtualenv,
+dependency management. dbt Fusion is a Rust binary — one file downloaded to
+`~/.local/bin/dbt`, no Python involved. dbt Labs rewrote it because Python's startup
+and project-parsing time was the bottleneck on large projects.
+
+**Rule of thumb:** compiled = faster and self-contained but must be built per
+platform. Interpreted = slower and needs a runtime but is easier to modify and ship.
+
+---
+
+## Adapters
+
+dbt models are written generically, but **every warehouse speaks a different SQL
+dialect.** Creating a table, merging rows, casting types, handling dates — Snowflake,
+BigQuery, Postgres, and Databricks all differ.
+
+An **adapter** is the translation layer: it knows how to *connect* to a specific
+warehouse and how to *emit valid SQL* for it.
+
+- dbt-core 1.x: installed separately (`pip install dbt-snowflake`)
+- dbt Fusion: compiled into the binary, including the database driver and a SQL
+  dialect parser
+
+Same idea appears everywhere — a database driver, an ODBC/JDBC connector, a cloud
+SDK. A generic interface plus a vendor-specific implementation behind it.
+
+---
+
+## YAML
+
+**YAML** — a human-readable format for configuration and structured data.
+
+```yaml
+# Comments start with a hash.
+models:
+  - name: stg_loans           # a list item, marked with -
+    description: Cleaned loans
+    columns:
+      - name: loan_id
+        tests:
+          - unique
+          - not_null
+```
+
+- **Indentation defines nesting**, like Python
+- `key: value` pairs
+- `-` marks list items
+- `#` for comments
+
+**The one unbreakable rule: spaces only, never tabs.** A tab produces a parse error
+that does not mention tabs. Everyone hits this once.
+
+**Why YAML over JSON for config:** YAML allows comments and is far less
+punctuation-heavy. JSON is better for machine-to-machine data exchange.
+
+---
+
+## Public Key Cryptography
+
+**The one-line version:** a digital ID card that proves who you are without sending
+a password.
+
+You generate a matched **key pair**:
+- **Private key** — stays on your machine forever. The secret.
+- **Public key** — handed to the service. Not secret at all.
+
+Anything signed by the private key can be verified with the public key, but the
+public key cannot produce a signature. So the service can confirm "this connection
+holds the matching private key" without ever possessing it.
+
+**The wax seal analogy:** you keep the stamp. The service keeps a picture of what
+the stamp's impression looks like. Anyone can verify the seal; only you can make one.
+
+**Why it beats passwords for automation:**
+- Nothing secret crosses the network — it can't be intercepted in transit
+- The service never stores anything that could be stolen and reused
+- **A CI runner cannot type an MFA code.** Key pair is how automated pipelines
+  authenticate.
+
+**Fingerprint** — a short hash of a public key (`RSA_PUBLIC_KEY_FP` in Snowflake).
+Public keys are long; a fingerprint is short enough to eyeball when checking "is this
+the key I think it is?"
+
+**RSA** — the algorithm. 2048 bits is the current standard minimum key size.
+
+**PKCS#8** — a standard file format for private keys. Snowflake requires it, which is
+why the key generation pipes through `openssl pkcs8`.
+
+**Passphrase tradeoff:** encrypting the private key with a passphrase adds a second
+secret you'd then have to store somewhere anyway. For automated service access, the
+standard pattern is an unencrypted key plus strict file permissions.
+
+---
+
+## File Permissions
+
+Unix files carry permissions for three audiences: **owner**, **group**, **everyone
+else**. Each gets read (4), write (2), execute (1), summed into a digit.
+
+| Mode | Means | Used for |
+|---|---|---|
+| `600` | owner read+write, nobody else anything | private keys, secrets |
+| `644` | owner read+write, everyone else read | normal files, public keys |
+| `755` | owner all, everyone else read+execute | folders, programs |
+
+`ls -l` shows them as `-rw-------` (600) or `-rw-r--r--` (644).
+
+**Some tools refuse to use a key file with permissions looser than 600.** That's a
+feature — it stops you from accidentally leaving a credential world-readable.
+
+---
+
+## Hidden Config Directories
+
+A **leading dot makes a file or folder hidden** on Unix — `ls` skips it unless you
+pass `-a`.
+
+By convention, tools store their settings in `~/.toolname/`:
+- `~/.dbt/` — dbt profiles and licenses
+- `~/.snowflake/` — Snowflake CLI config, keys
+- `~/.zshrc` — shell configuration
+- `~/.gitconfig` — Git identity
+
+**Credentials live here, outside any repo.** That's the point: config that varies per
+machine and contains secrets should never sit next to code that gets shared.
+
+---
+
+## Credential Hygiene
+
+**How credentials actually leak:** not dramatic breaches. Ordinary copy-paste — a
+config file pasted into Slack, a screenshot attached to a ticket, a `.env` committed
+by reflex, a password read aloud in a screen share.
+
+**Habits that prevent it:**
+- `cat` a config file and *look* before pasting it anywhere
+- Prefer key pair or environment variables over passwords in files
+- `.gitignore` secrets **before** the first `git add`, not after
+- Treat any credential that has been pasted anywhere as burned — rotate it
+- A committed secret lives in Git history forever, in every clone, even after the
+  file is deleted
+
+**Why key pair sidesteps this entirely:** there is no secret a human ever needs to
+read, copy, or transmit. The private key stays on disk and is used by tools, not
+people.

@@ -258,3 +258,84 @@ the file in Git, so there's no drift between version control and what executed.
 - `CREATE TASK` — scheduled SQL
 - Snowpipe — auto-ingest on file arrival
 - Time Travel and zero-copy cloning
+
+---
+
+## Authentication
+
+### The deprecation timeline (why this matters now)
+
+Snowflake is eliminating single-factor password sign-ins in three milestones:
+
+| Window | Change |
+|---|---|
+| Sept 2025 – Jan 2026 | MFA required for Snowsight logins using passwords |
+| **May 2026 – Jul 2026** | All **newly created** human users must use MFA |
+| **Aug 2026 – Oct 2026** | All human users must use MFA; all service users must use key pair, OAuth, PAT, or workload identity |
+
+Trial accounts are generally exempt until converted to paid — but that's a moving
+target, not a foundation.
+
+**The decisive argument is CI: a GitHub Actions runner cannot type an MFA code.**
+Key pair authentication exists for exactly this. Any automated pipeline needs it.
+
+### User types
+| TYPE | Meaning |
+|---|---|
+| `null` / `PERSON` | Human. Will require MFA for password auth. |
+| `SERVICE` | Automation. Cannot use passwords at all — key pair / OAuth only. |
+| `LEGACY_SERVICE` | Transitional, being removed. |
+
+**Don't set `TYPE = SERVICE` on your own login** — it blocks web UI access. A human
+user can hold an RSA public key and use both: password+MFA in the browser, key pair
+for tooling. Separate service users are what a real team creates for CI.
+
+### Registering a public key
+```sql
+SELECT CURRENT_USER();
+
+ALTER USER AFCAMACH SET RSA_PUBLIC_KEY = 'MIIBIjANBgkqh...';
+
+DESC USER AFCAMACH;
+```
+
+The key goes in as **one unbroken string** with the `-----BEGIN/END-----` wrapper
+lines stripped and newlines removed:
+```bash
+grep -v "^-----" ~/.snowflake/rsa_key.pub | tr -d '\n' | pbcopy
+```
+
+**Verify via `DESC USER`:**
+- `RSA_PUBLIC_KEY_FP` — the fingerprint. If populated, Snowflake accepted the key.
+- `RSA_PUBLIC_KEY_LAST_SET_TIME` — timestamp of registration.
+
+Snowflake displays the fingerprint rather than the key because a fingerprint is short
+enough to eyeball when comparing keys. The public key itself isn't secret.
+
+**Snowflake supports two keys** (`RSA_PUBLIC_KEY` and `RSA_PUBLIC_KEY_2`) so you can
+rotate without downtime: register the new one, switch clients over, then remove the
+old.
+
+### Key generation
+See `UNIX_COMMANDS.md` for the `openssl` commands. Snowflake requires **PKCS#8**
+format for the private key.
+
+**`ALTER USER ... SET RSA_PUBLIC_KEY` does not belong in version control.** The key
+is specific to one machine — anyone cloning the repo generates their own. It's a
+procedure to document in the README, not code to commit.
+
+---
+
+## More Context Commands
+
+```sql
+SELECT CURRENT_USER();
+SELECT CURRENT_WAREHOUSE();
+SELECT CURRENT_DATABASE();
+SELECT CURRENT_SCHEMA();
+
+DESC USER <username>;      -- all user properties incl. auth settings
+SHOW USERS;
+SHOW ROLES;
+SHOW WAREHOUSES;
+```

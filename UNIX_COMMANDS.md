@@ -151,3 +151,108 @@ gzcat file.csv.gz | head -1 | tr ',' '\n' | wc -l
   invisible non-breaking spaces that break argument parsing
 - **Silence means success** — most Unix commands print nothing when they work and
   only speak up on failure
+
+---
+
+## Permissions & Security
+
+| Command | Does |
+|---|---|
+| `chmod 600 file` | Owner read+write only — for private keys and secrets |
+| `chmod 644 file` | Owner read+write, others read — normal files |
+| `ls -l` | Show permissions, owner, size, date |
+
+Permissions read as `-rw-------` (600) or `-rw-r--r--` (644). Owner / group / others,
+each with read(4) write(2) execute(1) summed.
+
+---
+
+## Cryptography (openssl)
+
+**`openssl`** is the standard toolkit for keys, certificates, and encryption.
+
+```bash
+# Generate a 2048-bit RSA private key in PKCS#8 format (what Snowflake wants)
+openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out ~/.snowflake/rsa_key.p8 -nocrypt
+
+# Derive the public key from the private key
+openssl rsa -in ~/.snowflake/rsa_key.p8 -pubout -out ~/.snowflake/rsa_key.pub
+```
+
+- `genrsa 2048` — generate a 2048-bit RSA private key
+- `pkcs8 -topk8` — convert to PKCS#8, the format Snowflake requires
+- `-nocrypt` — no passphrase on the key
+- `-pubout` — output the public half
+
+**The public key is derived from the private key**, never the reverse. That
+asymmetry is the whole basis of the scheme.
+
+**Strip the PEM wrapper and copy to clipboard** (Snowflake wants bare key material):
+```bash
+grep -v "^-----" ~/.snowflake/rsa_key.pub | tr -d '\n' | pbcopy
+```
+- `grep -v` — **invert match**: print lines that do NOT match
+- `^-----` — regex for "line starts with five dashes"
+- `tr -d '\n'` — delete newlines, collapsing to one line
+
+---
+
+## Finding Files
+
+```bash
+find . -type f -not -path "./target/*" -not -path "./logs/*" | sort
+```
+
+- `find .` — walk the tree from here
+- `-type f` — files only, not directories
+- `-not -path "./target/*"` — exclude a subtree
+- `| sort` — alphabetize
+
+Better than `ls`-ing into every folder when you want a full inventory.
+
+---
+
+## Copying & Deleting
+
+| Command | Does |
+|---|---|
+| `cp a b` | Copy |
+| `rm file` | Delete a file — refuses to delete directories |
+| `rm -rf folder` | **Recursive + force delete. No undo. No trash.** |
+
+**`rm -rf` is the most dangerous command in Unix.** `-r` recurses into folders, `-f`
+suppresses all confirmation. Pointed at the wrong path it destroys everything below
+it silently.
+
+**Always `pwd` before `rm -rf`.** Confirm you are where you think you are.
+
+Prefer plain `rm` for files — it refuses to touch a directory, which is a useful
+guardrail.
+
+---
+
+## Command Substitution
+
+```bash
+cp ~/.dbt/profiles.yml ~/.dbt/profiles.yml.backup-$(date +%Y%m%d)
+```
+
+**`$(command)`** runs the command and substitutes its *output* into the line. Here
+`date +%Y%m%d` produces `20260726`, giving a dated backup filename.
+
+Dated backups beat overwriting a single `.bkp` file every time.
+
+---
+
+## Reading Long Help Output
+
+```bash
+dbt init --help | head -40
+```
+
+When `--help` floods the screen, pipe it to `head` — the usage line and the key flags
+are almost always at the top.
+
+**When a command rejects your arguments, read `--help` before searching.** It is
+authoritative for the exact version installed on your machine. Syntax changes between
+major versions, and tutorials go stale.

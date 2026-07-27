@@ -253,3 +253,163 @@ what intermediate and marts are for.
 - Incremental models and `is_incremental()` — Day 5
 - Snapshots — not planned for v1
 - Custom macros — as needed
+
+---
+
+## Setup As Actually Performed (Fusion, July 2026)
+
+### Install / update
+```bash
+dbt system update      # updates the Rust binary in place
+dbt --version          # dbt-fusion 2.0.0-preview.202
+```
+
+Binary lives at `~/.local/bin/dbt`. The updater adds that to PATH in `~/.zshrc`.
+
+### Init — syntax differs from dbt-core 1.x
+```bash
+dbt init --project-name credit_stream
+```
+
+**Not** `dbt init credit_stream`. Fusion takes a flag, not a positional argument.
+The old syntax errors with `unexpected argument found`.
+
+Interactive prompts:
+1. Profile setup → **Set up a new profile from scratch**
+2. Adapter → **snowflake** (all adapters available; none need installing)
+3. Auth method → **Key pair**
+4. Private key path vs inline → **file path**
+
+`--sample` defaults to `jaffle-shop`, so init scaffolds a full sample project.
+
+### What init creates — and what to delete
+```
+models/staging/*     ← DELETE, jaffle-shop samples
+models/marts/*       ← DELETE
+seeds/*.csv          ← DELETE
+macros/cents_to_dollars.sql  ← DELETE
+README.md            ← DELETE (repo already has a real one)
+
+dbt_project.yml      ← KEEP, edit
+packages.yml         ← KEEP (comes with dbt_utils already listed)
+.gitignore           ← KEEP
+.vscode/extensions.json ← KEEP
+```
+
+A portfolio repo containing someone else's tutorial models is worse than an empty one.
+
+### Folder naming
+Project was renamed from `credit_stream/` to `dbt/` inside the repo.
+**Folder name and project name are independent** — the `profile:` lookup uses the
+project name from `dbt_project.yml`, not the directory. Nothing breaks.
+
+```
+credit-stream/
+├── snowflake/    # infrastructure DDL
+├── dbt/          # transformations  ← the dbt project
+└── README.md
+```
+
+Some CI tooling assumes dbt lives at the repo root. Non-issue — the workflow just
+runs `cd dbt` first.
+
+---
+
+## profiles.yml With Key Pair Auth
+
+Lives at `~/.dbt/profiles.yml`, outside the repo.
+**Multiple profiles coexist in one file** — add a new block rather than overwriting.
+
+```yaml
+credit_stream:
+  target: dev
+  outputs:
+    dev:
+      type: snowflake
+      account: DLKDUTD-CI31254
+      user: AFCAMACH
+      private_key_path: /Users/anfelca2/.snowflake/rsa_key.p8
+      role: ACCOUNTADMIN
+      warehouse: COMPUTE_WH
+      database: CREDIT_STREAM
+      schema: dbt_andres
+      threads: 8
+```
+
+**No `password:` field at all.** `private_key_path` replaces it — dbt reads the key,
+signs a token, Snowflake verifies against the registered public key.
+
+**Absolute path, not `~`.** Tilde expansion is the shell's job; dbt reads this file
+directly.
+
+**Back up before editing:**
+```bash
+cp ~/.dbt/profiles.yml ~/.dbt/profiles.yml.backup-$(date +%Y%m%d)
+```
+
+**The `profile:` key in `dbt_project.yml` must match the top-level key here.**
+Mismatch is the most common `dbt debug` failure and the error doesn't make the cause
+obvious.
+
+**Schema should NOT be `raw`.** Raw is the immutable landing zone; dbt writes
+elsewhere. Naming the dev schema after yourself (`dbt_andres`) is the convention —
+on a team every developer gets their own so nobody clobbers anyone else.
+
+---
+
+## dbt_project.yml Config Worth Knowing
+
+```yaml
+models:
+  credit_stream:
+    +static_analysis: strict
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table
+```
+
+**`+static_analysis: strict`** — a Fusion feature. Parses SQL and validates column
+references and types against the real warehouse schema **at compile time**, before
+executing. Catches a typo'd column in seconds instead of after a five-minute run.
+One of the genuine advantages of the Rust engine.
+
+**Staging as views, marts as tables** — staging models are thin transformations
+queried rarely, so a view costs nothing to build. Marts are queried repeatedly, so
+materializing pays off.
+
+**Delete config for things you don't have.** The scaffold shipped a `seeds:` block
+routing seeds into a `_raw` schema; with all seeds deleted it was dead config that
+would also collide conceptually with the S3 landing zone.
+
+---
+
+## Packages
+
+`dbt_utils` confirmed working on Fusion:
+```bash
+dbt deps
+# Installed dbt-labs/dbt_utils: 1.4.1
+```
+
+Downloads into `dbt_packages/`, which is **gitignored** — packages are fetched, not
+authored. `packages.yml` is the source of truth; anyone cloning runs `dbt deps`.
+
+---
+
+## dbt debug
+
+```bash
+cd ~/credit-stream/dbt
+dbt debug
+```
+
+Checks the profile parses, credentials work, and warehouse/database/schema are
+reachable. **First thing to run when anything dbt-related breaks** — it isolates
+"can I connect at all?" from "is my SQL wrong?"
+
+Failure causes, in order of likelihood:
+1. YAML indentation slip in `profiles.yml`
+2. `profile:` name mismatch between `dbt_project.yml` and `profiles.yml`
+3. Wrong account identifier
+4. Bad private key path

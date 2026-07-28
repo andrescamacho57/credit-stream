@@ -1,0 +1,13 @@
+version: 2
+
+sources:
+  - name: raw
+    description: Immutable landing zone. Loaded from S3, never modified in place.
+    database: credit_stream
+    schema: raw
+    tables:
+      - name: accepted_loans
+        description: >
+          Lending Club accepted loans, 2007 through 2018Q4.
+          One row per loan, keyed on id. All columns VARCHAR by design
+          so loads cannot fail on type mismatch.

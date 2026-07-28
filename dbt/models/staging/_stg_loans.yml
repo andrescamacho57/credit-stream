@@ -1,0 +1,46 @@
+version: 2
+
+models:
+  - name: stg_loans
+    description: >
+      Lending Club accepted loans, cleaned and typed.
+      Grain: one row per loan. Footer rows from the source CSVs are excluded.
+    columns:
+      - name: loan_id
+        description: Natural key from Lending Club. Kept as text - never used in arithmetic.
+        tests:
+          - unique
+          - not_null
+
+      - name: loan_amount
+        description: Funded amount in USD.
+        tests:
+          - not_null
+
+      - name: term_months
+        description: Loan term in months, parsed from strings like " 36 months".
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [36, 60]
+
+      - name: employment_length_years
+        description: >
+          Years employed. Source is bucketed text, not a measurement.
+          "< 1 year" maps to 0 and "10+ years" maps to 10, so averages are
+          biased slightly low. Null where the borrower did not report it
+          (~6.5% of rows).
+
+      - name: issued_at
+        description: Month the loan was issued, parsed from "Dec-2018". Always the 1st.
+        tests:
+          - not_null
+
+      - name: grade
+        description: Lending Club risk grade, A through G.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['A', 'B', 'C', 'D', 'E', 'F', 'G']

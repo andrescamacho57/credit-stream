@@ -1,0 +1,42 @@
+version: 2
+
+models:
+  - name: dim_date
+    description: >
+      Conformed date dimension. Grain: one row per calendar day, 2007-01-01
+      through 2027-12-31. Generated as a full daily calendar rather than
+      derived from loan issue dates, so that payment events landing on
+      arbitrary days have a row to join to.
+    columns:
+      - name: date_key
+        description: >
+          Integer surrogate key in YYYYMMDD form. Dimensional modeling
+          convention - readable inside a fact table without joining.
+          Not usable for date arithmetic; use calendar_date for that.
+        tests:
+          - unique
+          - not_null
+
+      - name: calendar_date
+        description: The actual date. Use this for any date arithmetic.
+        tests:
+          - unique
+          - not_null
+
+      - name: calendar_year
+        tests:
+          - not_null
+
+      - name: calendar_quarter
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [1, 2, 3, 4]
+
+      - name: month_number
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]

@@ -1,0 +1,43 @@
+version: 2
+
+models:
+  - name: dim_geography
+    description: >
+      US state dimension. Grain: one row per state, 51 including DC.
+      Built from the state_regions seed rather than derived from loan data,
+      so states with zero loans still appear. Regions and divisions follow
+      the official US Census classification.
+    columns:
+      - name: state_key
+        description: Two-letter state code. Natural key - no surrogate needed.
+        tests:
+          - unique
+          - not_null
+
+      - name: state_name
+        tests:
+          - not_null
+
+      - name: census_region
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['Northeast', 'Midwest', 'South', 'West']
+
+      - name: census_division
+        tests:
+          - not_null
+
+seeds:
+  - name: state_regions
+    description: >
+      Static reference data: US states mapped to Census regions and divisions.
+      Maintained by hand - not sourced from any upstream system.
+    columns:
+      - name: state_code
+        tests:
+          - unique
+          - not_null
+
+

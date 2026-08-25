@@ -1,0 +1,56 @@
+version: 2
+
+models:
+  - name: dim_loan_status
+    description: >
+      Loan status dimension. Grain: one row per (status, credit policy flag)
+      combination - 9 rows. Derived from stg_loans rather than a seed, because
+      the status domain is defined by the source system, not externally.
+
+      Source values like "Does not meet the credit policy. Status:Charged Off"
+      pack two independent facts into one string. Split here so that filtering
+      on loan_status catches every loan of that status regardless of policy.
+    columns:
+      - name: loan_status_key
+        description: >
+          Surrogate key hashing (loan_status, meets_credit_policy). Needed
+          because the natural key is two columns - unlike dim_geography, where
+          the state code was already unique on its own.
+        tests:
+          - unique
+          - not_null
+
+      - name: loan_status
+        description: Normalized status, policy language stripped.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['Fully Paid', 'Current', 'In Grace Period',
+                         'Late (16-30 days)', 'Late (31-120 days)',
+                         'Default', 'Charged Off']
+
+      - name: delinquency_stage
+        description: >
+          Ordinal severity 0-5. Enables roll-rate analysis and range filters
+          like delinquency_stage >= 2 for seriously delinquent. Fully Paid and
+          Current are both 0 - neither is delinquent; is_terminal carries the
+          finished-vs-ongoing distinction. A null here means a new status
+          appeared in the source and fell through the mapping.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [0, 1, 2, 3, 4, 5]
+
+      - name: meets_credit_policy
+        tests:
+          - not_null
+
+      - name: is_performing
+        tests:
+          - not_null
+
+      - name: is_terminal
+        tests:
+          - not_null

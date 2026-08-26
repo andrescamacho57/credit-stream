@@ -1,0 +1,48 @@
+version: 2
+
+models:
+  - name: dim_purpose
+    description: >
+      Loan purpose dimension. Grain: one row per purpose, 14 rows.
+
+      Earns a table because of the category rollup and the small-business
+      flag - unlike dim_loan_grade, which was dropped because splitting
+      "A1" into grade "A" is left(sub_grade, 1), not a dimension.
+
+      Category assignments are judgment, not an external standard.
+      renewable_energy grouped under Home and educational under Life Event
+      are both arguable.
+    columns:
+      - name: purpose_key
+        description: >
+          Source purpose string. Natural key - already unique, so no
+          surrogate needed.
+        tests:
+          - unique
+          - not_null
+
+      - name: purpose_name
+        description: Display label, snake_case converted to title case.
+        tests:
+          - not_null
+
+      - name: purpose_category
+        description: >
+          Rollup grouping. Debt Refinancing combines debt_consolidation and
+          credit_card, which are economically the same behavior and together
+          are 79.4% of the book. A null here means a new purpose appeared in
+          the source and fell through the CASE.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['Debt Refinancing', 'Home', 'Major Purchase',
+                         'Business', 'Life Event', 'Discretionary', 'Other']
+
+      - name: is_small_business
+        description: >
+          True for the small_business purpose only - 24,689 loans, 1.09%.
+          Commercial credit behaves differently from consumer credit.
+          Note the sample size when quoting rates from this segment.
+        tests:
+          - not_null

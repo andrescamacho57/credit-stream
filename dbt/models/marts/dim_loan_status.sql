@@ -14,26 +14,10 @@
 
 with source_statuses as (
 
-    select distinct loan_status as raw_status
+    select distinct
+        loan_status,
+        meets_credit_policy
     from {{ ref('stg_loans') }}
-
-),
-
-normalized as (
-
-    select
-        raw_status,
-
-        case
-            when raw_status like 'Does not meet the credit policy.%'
-                then trim(split_part(raw_status, 'Status:', 2))
-            else raw_status
-        end as loan_status,
-
-        raw_status not like 'Does not meet the credit policy.%'
-            as meets_credit_policy
-
-    from source_statuses
 
 ),
 
@@ -77,7 +61,7 @@ final as (
             else false
         end as is_terminal
 
-    from normalized
+    from source_statuses
 
 )
 

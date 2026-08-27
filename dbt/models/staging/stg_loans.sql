@@ -46,8 +46,20 @@ cleaned as (
         trim(sub_grade)                                    as sub_grade,
         trim(purpose)                                      as purpose,
         trim(addr_state)                                   as state_code,
-        trim(loan_status)                                  as loan_status,
 
+               -- Source packs two independent facts into one string:
+        -- "Does not meet the credit policy. Status:Charged Off" is a status
+        -- PLUS a policy exception. Split here so downstream filters on
+        -- loan_status catch every loan of that status.
+        case
+            when loan_status like 'Does not meet the credit policy.%'
+                then trim(split_part(loan_status, 'Status:', 2))
+            else trim(loan_status)
+        end                                                as loan_status,
+
+        loan_status not like 'Does not meet the credit policy.%'
+                                                           as meets_credit_policy,
+                                                           
         -- Borrower attributes: NOT properties of a person. member_id is
         -- 100% null in this dataset, so there is no borrower entity. These
         -- are values captured on one application form at one moment.

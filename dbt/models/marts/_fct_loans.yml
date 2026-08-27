@@ -1,0 +1,90 @@
+version: 2
+
+models:
+  - name: fct_loans
+    description: >
+      Loan fact table. Grain: one row per loan, 2,260,668 rows.
+
+      No borrower dimension exists - member_id is 100% null in this dataset,
+      so two loans cannot be linked to the same person. The loan is the atomic
+      entity. Borrower attributes here are a snapshot from one application
+      form, not properties of a person trackable over time.
+
+      dim_date is a role-playing dimension: three date keys reference the same
+      physical table for different purposes.
+    columns:
+      - name: loan_id
+        description: Degenerate dimension - the loan's own identifier.
+        tests:
+          - unique
+          - not_null
+
+      - name: state_key
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_geography')
+                field: state_key
+
+      - name: purpose_key
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_purpose')
+                field: purpose_key
+
+      - name: loan_status_key
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_loan_status')
+                field: loan_status_key
+
+      - name: issued_date_key
+        description: Role-playing FK to dim_date. Never null - every loan has an issue date.
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+
+      - name: last_payment_date_key
+        description: >
+          Role-playing FK to dim_date. Nullable - loans with no recorded
+          payment. The relationships test ignores nulls by design.
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+
+      - name: last_credit_pull_date_key
+        description: Role-playing FK to dim_date. Nullable.
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+
+      - name: loan_amount
+        tests:
+          - not_null
+
+      - name: installment_amount
+        description: >
+          Required monthly obligation. The column the payment anomaly
+          detection depends on - payments summing to less than this is the
+          signal, and it is unavailable from the stream alone.
+        tests:
+          - not_null
+
+      - name: fico_migration
+        description: >
+          fico_at_last_pull minus fico_at_origination. Negative means
+          deterioration. CAUTION: for charged-off loans the last pull happened
+          after default, so this leaks the label. Valid for portfolio
+          monitoring, not for predictive modeling.

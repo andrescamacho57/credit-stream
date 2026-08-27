@@ -80,6 +80,51 @@ git staging semantics
 **Concepts:** compiled vs interpreted, adapters, YAML, public key cryptography,
 file permissions, hidden config directories, credential hygiene
 
+### Day 3 — 2026-07-27/28: First staging model
+
+- `_sources.yml` declaring raw.accepted_loans as a dbt source
+- `stg_loans` — 10 columns cleaned: " 36 months" → 36, "10+ years" → 10,
+  "Dec-2018" → date, consistent naming, units in column names
+- Verified casting destroyed nothing by comparing null counts source vs. model —
+  all six columns matched exactly
+- **Found 33 footer rows** ("Total amount funded in policy code 2: …") that the
+  Kaggle uploader concatenated in from Lending Club's quarterly CSVs. Load was
+  green, casts were green, nothing errored.
+- Filtered on `try_cast(id as number) is not null` — the grain definition, not
+  the symptom or a string match. Verified blast radius was exactly 33 first.
+- 8 tests passing: unique + not_null on the key, not_null on the three columns
+  footers left empty, accepted_values on term (36/60) and grade (A–G)
+
+**Concepts:** contracts and grain, green pipeline ≠ correct data, count(*) vs
+count(col), try_cast silent failure, filtering on meaning not symptoms, CTE
+structure, unused-CTE no-op, display vs analytical values, heredocs
+
+### Day 4 — 2026-08-24: Star schema
+
+- Discovered member_id is 100% null — no borrower entity exists. Restructured
+  around the loan as the atomic unit rather than inventing a dimension the data
+  doesn't support.
+- Grain statements written for every table before any SQL
+- dim_date (7,670 days, full calendar so payment events have dates to land on)
+- dim_geography (51 states, from a seed, with Census region and division)
+- dim_loan_status (9 rows, delinquency ordinal, policy flag split out,
+  surrogate key because the natural key is two columns)
+- dim_purpose (14 rows, category rollup, is_small_business flag)
+- **dim_loan_grade built and dropped** — left(sub_grade,1) is not a dimension
+- fct_loans: 2,260,668 rows, role-playing date keys, fico_migration measure
+- Refactored the status split from the dimension into staging, turning an ugly
+  reconstructed-string join into two equality conditions. Verified
+  behavior-preserving via the same grain check before and after.
+- 27 tests green across the project, including 6 relationships tests
+
+**Concepts:** star schema, cardinality, degenerate dimensions, surrogate vs
+natural keys, role-playing and conformed dimensions, seed vs derived domains,
+splitting columns that encode two facts, refactoring discipline
+
+
+
+
+
 
 
 ---

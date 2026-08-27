@@ -413,3 +413,326 @@ Failure causes, in order of likelihood:
 2. `profile:` name mismatch between `dbt_project.yml` and `profiles.yml`
 3. Wrong account identifier
 4. Bad private key path
+
+
+---
+
+## Sources — Declaring What dbt Did Not Build
+
+`models/staging/_sources.yml`:
+
+```yaml
+version: 2
+
+sources:
+  - name: raw
+    description: Immutable landing zone. Loaded from S3, never modified in place.
+    database: credit_stream
+    schema: raw
+    tables:
+      - name: accepted_loans
+        description: >
+          Lending Club accepted loans, 2007 through 2018Q4.
+          One row per loan, keyed on id.
+```
+
+Reference it in a model as `{{ source('raw', 'accepted_loans') }}`.
+
+- `name: raw` is the **alias used in code**, not necessarily the schema name
+- `database` and `schema` say where it actually lives
+- `>` is YAML folded-block syntax for multi-line text joined into one line
+
+**Leading underscore in the filename** (`_sources.yml`, `_stg_loans.yml`) sorts it to
+the top of the folder. Convention for files that describe a folder rather than being
+a model in it.
+
+---
+
+## Model Anatomy
+
+```sql
+with source as (
+
+    select * from {{ source('raw', 'accepted_loans') }}
+
+),
+
+loans_only as (
+
+    select * from source
+    where try_cast(id as number) is not null
+
+),
+
+cleaned as (
+
+    select
+        id                                  as loan_id,
+        try_cast(loan_amnt as number(12,2)) as loan_amount
+    from loans_only
+
+)
+
+select * from cleaned
+```
+
+- **One CTE per logical step**, named for what it does
+- Final `select * from <last_cte>` — makes the output obvious
+- `{{ source(...) }}` is Jinja; dbt substitutes the real table name at compile time
+- Compiled output lands in `target/compiled/` — worth reading once to see what dbt
+  actually sent to the warehouse
+
+**An unused CTE is a silent no-op.** Defining a filter step but leaving the next CTE
+reading from the previous one compiles, runs, and reports success while changing
+nothing. SQL does not warn about this.
+
+---
+
+## Tests
+
+`models/staging/_stg_loans.yml`:
+
+```yaml
+version: 2
+
+models:
+  - name: stg_loans
+    description: >
+      Grain: one row per loan. Footer rows from the source CSVs are excluded.
+    columns:
+      - name: loan_id
+        description: Natural key. Kept as text - never used in arithmetic.
+        tests:
+          - unique
+          - not_null
+
+      - name: term_months
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [36, 60]
+```
+
+**Note the `arguments:` nesting** under `accepted_values`. This works on Fusion.
+Older tutorials show `values:` directly under the test name — if you copy from a
+dbt-core 1.x example and it errors, this is why.
+
+### The four generic tests
+
+| Test | Asserts |
+|---|---|
+| `unique` | no duplicate values |
+| `not_null` | no nulls |
+| `accepted_values` | every value is in a given list |
+| `relationships` | every value exists in another model column (foreign key) |
+
+### What a test actually is
+
+**A SQL query designed to return the failing rows.** Zero rows returned = the
+assertion holds. That is the entire mechanism — nothing more magic than that.
+
+### Test selection principles
+
+- **`unique` + `not_null` on the key is the grain test** — the single most important
+  test in any model. Catches junk rows returning and joins that fan out.
+- **Test the columns that were broken before.** The footer rows had null amount,
+  term, and issue date — so `not_null` on those three is a tripwire for their return.
+- **`accepted_values` encodes domain knowledge.** Lending Club only issued 36- and
+  60-month loans; a 48 means the source changed or the parsing broke.
+- **Do not test what is legitimately nullable.** `employment_length_years` is null
+  for ~6.5% of rows because borrowers did not report it. A `not_null` there would
+  fail on correctly-handled data. The description carries the caveat instead.
+
+---
+
+## Commands Used
+
+```bash
+dbt parse                        # validate YAML and SQL structure, no connection
+dbt run   --select stg_loans     # build one model
+dbt test  --select stg_loans     # test one model
+dbt build --select stg_loans     # run + test in dependency order  <- prefer this
+```
+
+**Always use `--select`.** `dbt run` with no selector rebuilds everything.
+
+**Prefer `dbt build`** over `run` then `test`: build interleaves them, so a model
+whose upstream test failed never gets built on bad data.
+
+### Warnings that are fine
+
+`UnusedResourceConfigPath` — `dbt_project.yml` declares config for `models.*.marts`
+but no marts exist yet. Resolves itself when the folder has models in it.
+
+`NoNodesForSelectionCriteria` — the selector matched nothing. Usually means the model
+file is empty or was never saved.
+
+
+---
+
+## Seeds
+
+Small static reference data loaded from CSV into a table.
+
+```
+dbt/seeds/state_regions.csv
+```
+
+```bash
+dbt seed              # load seeds only
+dbt build             # runs seeds, models, and tests together
+```
+
+Reference in a model with **`ref()`**, not `source()` — dbt built the table, so it is
+part of the dependency graph:
+
+```sql
+select * from {{ ref('state_regions') }}
+```
+
+**When a seed is right:** small, static, human-maintained reference data that does not
+exist in the source system. Version-controlled, diffs cleanly in a PR, editable by
+someone who does not write SQL.
+
+**When it is wrong:** anything large (50,000 rows belongs in a real source table), or
+anything the source system already defines.
+
+**A seed is not a dimension.** The seed is raw reference data; the dimension sits on
+top of it, same as `stg_loans` sits on `raw.accepted_loans`.
+
+**Seeds can carry tests** — declare them under a `seeds:` block in the YAML.
+
+**Watch the root `.gitignore`.** A `*.csv` rule will silently exclude your seed from
+version control.
+
+---
+
+## The relationships Test
+
+```yaml
+      - name: state_key
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_geography')
+                field: state_key
+```
+
+Asserts every value in this column exists in the target model's column. Under the
+hood it is a left join filtered to nulls on the right — the permanent version of:
+
+```sql
+select l.state_code, count(*)
+from stg_loans l
+left join dim_geography g on l.state_code = g.state_key
+where g.state_key is null
+group by l.state_code;
+```
+
+**This is the test that makes a star schema trustworthy.** Without it, a key pointing
+at a missing dimension row means those facts silently vanish from any inner join, or
+produce nulls on a left join. Nobody notices until a number is wrong in a dashboard.
+
+**Nulls are ignored by design** — a nullable FK like `last_payment_date_key` passes as
+long as its non-null values all resolve.
+
+---
+
+## Selectors
+
+| Selector | Means |
+|---|---|
+| `--select model_name` | just that model |
+| `--select +model_name` | that model **and everything upstream** |
+| `--select model_name+` | that model **and everything downstream** |
+| `--select +model_name+` | the full lineage both directions |
+| `--select folder_name` | everything in that folder |
+| `--select a b` | multiple resources, space-separated |
+
+`+model` is better than listing dependencies by hand — it cannot go stale when you add
+an upstream model later.
+
+**`stg_loans+` is the one to use after changing staging** — it rebuilds every
+dimension and fact that depends on it.
+
+---
+
+## dbt build Stops on Failure
+
+When a model fails, `dbt build` **skips** its tests and every downstream model:
+
+```
+ Failed  [ 2.07s] model dim_loan_status
+ Skipped [------] test 'unique_dim_loan_status_loan_status_key' and 8 others
+ Skipped [------] model fct_loans
+```
+
+`dbt run` followed by `dbt test` would have built everything on bad data first and
+told you afterward. **This is the argument for `build` over `run` + `test`.**
+
+---
+
+## dbt clean
+
+```bash
+dbt clean     # deletes target/ and dbt_packages/
+dbt deps      # reinstall packages - clean removed them
+```
+
+**When you need it:** Fusion caches the warehouse schema for static analysis. After
+adding a column to an upstream model you can get:
+
+```
+[UnresolvedIdentifier (dbt0227)]: No column MEETS_CREDIT_POLICY found in the
+locally cached schema for the source in CREDIT_STREAM.RAW.ACCEPTED_LOANS
+It is likely that this cache needs to be refreshed by running: dbt clean
+```
+
+Note it resolves the reference all the way back to the **source table**, not just the
+immediate parent — that is static analysis tracing the full lineage before executing
+anything.
+
+**Always `dbt deps` after `dbt clean`**, or the next build fails on a missing package.
+
+**Rule out a missing save first.** The same error appears if the upstream edit never
+made it to disk:
+
+```bash
+grep meets_credit_policy models/staging/stg_loans.sql
+```
+
+---
+
+## Role-Playing Dimensions in Practice
+
+Three keys on the fact, all referencing `dim_date`:
+
+```sql
+        cast(to_char(l.issued_at, 'YYYYMMDD') as integer)  as issued_date_key,
+        cast(to_char(l.last_payment_at, 'YYYYMMDD') as integer)
+                                                           as last_payment_date_key,
+        cast(to_char(l.last_credit_pull_at, 'YYYYMMDD') as integer)
+                                                           as last_credit_pull_date_key,
+```
+
+Each gets its own `relationships` test. Downstream, join `dim_date` three times with
+different aliases.
+
+---
+
+## The Save-Before-Build Trap
+
+Recurring failure mode in this project:
+
+```bash
+touch models/marts/_fct_loans.yml
+code models/marts/_fct_loans.yml
+dbt build --select fct_loans      # <- runs against the still-empty file
+```
+
+Result: `1 model | 0 tests`. The build succeeded and tested nothing.
+
+**Tell:** the summary says 0 tests when you just wrote a YAML file.
+**Check:** `wc -l models/marts/_fct_loans.yml` — a `0` means empty.
+**Habit:** VS Code shows a filled dot instead of an X on tabs with unsaved changes.

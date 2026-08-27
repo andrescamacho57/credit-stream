@@ -513,3 +513,361 @@ by reflex, a password read aloud in a screen share.
 **Why key pair sidesteps this entirely:** there is no secret a human ever needs to
 read, copy, or transmit. The private key stays on disk and is used by tools, not
 people.
+
+---
+
+## Contracts and Grain
+
+**A contract is a promise about your output that others can rely on without reading
+your code.**
+
+`stg_loans` promises: one row per loan, `loan_id` unique and never null,
+`term_months` is an integer, `issued_at` is a real date. Anything built downstream
+depends on those promises holding.
+
+Same idea as an API contract or a function signature — the implementation can change
+freely, the promise cannot.
+
+**Grain** — what one row represents. "One row per loan." "One row per payment."
+"One row per customer per month." **This is the single most important thing to state
+about any table**, and the first question to ask about someone else's.
+
+Getting grain wrong is how you get silently-double-counted revenue. A join that
+fans out changes the grain without announcing it.
+
+**A comment saying "one row per loan" is a hope. A `unique` test on the key is
+enforcement.** Tests are what make a contract real — they fail the build when the
+promise breaks.
+
+---
+
+## Green Pipeline ≠ Correct Data
+
+**The most important lesson from this project so far.**
+
+The Lending Club load ran clean: 2,260,701 rows parsed, 2,260,701 loaded, zero
+rejected, all casts succeeded. Every dbt model built successfully.
+
+**33 of those rows were not loans.** Lending Club appends a summary footer to each
+quarterly CSV — `Total amount funded in policy code 2: 81866225`. Concatenating the
+quarterly files carried the footers in as data rows. The footer text landed in the
+`id` column and every other field parsed as null.
+
+Nothing errored. Nothing warned. The row count was inflated, every average over a
+nullable column was shifted, and any `COUNT(*)` downstream would have been wrong.
+
+**It was only found by explicitly checking.**
+
+**The general lesson:** tooling verifies that operations *completed*, not that
+results are *correct*. Correctness has to be asserted separately — by you, in tests.
+
+---
+
+## Verifying a Load Actually Worked
+
+**`count(*)` vs `count(column)`** — `count(*)` counts rows; `count(some_column)`
+counts rows where that column is **not null**. The gap between them is the null
+count, with no `WHERE` clause needed.
+
+**The technique:** run the same counts on the source and on the transformed model,
+then compare column by column.
+
+```sql
+-- on the model
+select count(*), count(loan_amount), count(term_months) from stg_loans;
+-- on the source
+select count(*), count(loan_amnt), count(term) from raw.accepted_loans;
+```
+
+Matching numbers mean the transformation destroyed nothing. A gap separates "was
+already null in the source" from "my cast silently broke it" — two very different
+problems that look identical if you only inspect the output.
+
+**`count_if(condition)`** — counts rows where a condition is true. Cleaner than
+`sum(case when ... then 1 else 0 end)`.
+
+**Always measure a filter's blast radius before applying it.** Confirm the count it
+removes matches the count you expect to remove. If it's larger, there's a category
+of data you haven't looked at.
+
+---
+
+## try_cast vs cast
+
+**`cast`** errors on the first bad value and kills the query.
+**`try_cast`** returns null instead.
+
+**In a staging layer, prefer `try_cast`** — you want the model to survive one
+malformed row rather than blocking everything.
+
+**But `try_cast` fails silently**, which is its own risk: it can quietly null out a
+column and still report success. The discipline is **permissive casting plus a test
+that catches what slipped through**. Belt and suspenders.
+
+---
+
+## Filtering on Meaning, Not Symptoms
+
+Three ways to remove the footer rows:
+
+| Filter | Filters on | Problem |
+|---|---|---|
+| `where loan_amnt is not null` | a **symptom** | drops a real loan that happened to lack an amount |
+| `where id not like 'Total amount%'` | a **literal string** | breaks silently if the wording changes |
+| `where try_cast(id as number) is not null` | the **grain definition** | ✓ |
+
+The third encodes what you actually mean — "a loan is keyed by a numeric id" — so it
+catches future junk regardless of its wording.
+
+**General principle: filter on the definition of what belongs, not on a
+characteristic of what doesn't.**
+
+---
+
+## CTEs and Model Structure
+
+**CTE (Common Table Expression)** — a named subquery defined with `with`.
+
+dbt convention is one CTE per logical step, named for what it does:
+
+```sql
+with source as (...),        -- pull it in
+loans_only as (...),         -- filter to the grain
+cleaned as (...)             -- cast and rename
+select * from cleaned
+```
+
+A reader follows the pipeline top to bottom without holding nested subqueries in
+their head. Overkill for two steps; stops being overkill fast.
+
+**Warning — an unused CTE is a silent no-op.** Defining `loans_only` but leaving the
+next CTE reading `from source` compiles fine, runs fine, reports success, and changes
+nothing. SQL does not warn about unused CTEs. If a change appears to have no effect,
+check that the new step is actually wired into the chain.
+
+---
+
+## Display Values vs Analytical Values
+
+The value you *compute with* and the value you *show a human* are different things
+and belong in different layers.
+
+`emp_length` in the source is bucketed text: `'< 1 year'`, `'10+ years'`.
+
+- **Staging** produces the analytical value — `0` and `10` — because these get
+  filtered, compared, and averaged.
+- **Marts or the dashboard** produce the display value — `'< 1 year'` — because
+  that's a presentation concern.
+
+**Name the cost when you make this choice.** Mapping `'< 1 year'` to 0 biases average
+tenure slightly low, since everyone under 12 months contributes zero. Using 0.5 as a
+midpoint would invent precision the source never had. Document the decision in the
+model and in the column description so nobody downstream mistakes a bucket boundary
+for a measurement.
+
+**Put the unit in the column name.** `interest_rate_pct` = 13.56 means 13.56%.
+Ambiguous units cause real bugs and naming them away costs nothing.
+
+---
+
+## Sources in dbt
+
+Declaring a raw table as a **source** rather than hardcoding its name buys five things:
+
+1. **Lineage** — dbt builds its dependency graph from `ref()` and `source()` calls.
+   A hardcoded table name is invisible; the model appears to come from nowhere.
+2. **One place to change** — if the raw schema moves, edit one YAML file.
+3. **Testing at the boundary** — bad data gets caught entering the project, not three
+   models downstream.
+4. **Freshness checks** — `dbt source freshness` can flag stale tables.
+5. **Semantic clarity** — `source()` means "arrived from outside." `ref()` means
+   "dbt built this." That distinction *is* the boundary between raw and everything
+   after it.
+
+
+---
+
+## Star Schema
+
+**The division of labor:**
+
+| | Dimensions | Fact |
+|---|---|---|
+| Row count | tiny (9–7,670) | huge (2.26M) |
+| Content | descriptive text | numbers and keys |
+| Changes | rarely | constantly |
+| Answers | "what are the options?" | "what happened?" |
+
+**Why it beats one wide table:** the definition of "West region" lives in one row
+instead of 800,000 copies. Change it once, everything downstream is consistent. And
+`group by census_region` replaces a 51-branch CASE statement.
+
+**Why it is called a star:** fact in the middle, dimensions radiating out, every
+dimension exactly one hop from center. No dimension joins to another dimension.
+
+**Build dimensions first.** The fact carries foreign keys pointing into them — you
+cannot test that a key resolves if the target does not exist yet.
+
+**Cardinality** — the number of distinct values in a column. `grade` has cardinality
+7. `loan_id` has cardinality 2,260,668, one per row, which is what makes it a key.
+Low cardinality suggests a dimension candidate; cardinality equal to row count means
+it is an identifier.
+
+---
+
+## Does This Column Earn a Dimension Table?
+
+The textbook move is to dimension every low-cardinality attribute. **That is usually
+wrong.** A 3-row table whose only column is the value itself is a join you pay for to
+retrieve a string you already had.
+
+**The test is not "is cardinality low?" It is "does this table carry information the
+fact table does not already have?"**
+
+Three answers to the same question in this project:
+
+| Dimension | Verdict | Why |
+|---|---|---|
+| `dim_geography` | **build** | adds region and division — an entire rollup level the source lacks |
+| `dim_loan_status` | **build** | ordinal severity enables roll-rate analysis and range filters |
+| `dim_purpose` | **build** | category rollup (79.4% of the book collapses to one group) plus a small-business flag |
+| `dim_loan_grade` | **drop** | `left(sub_grade, 1)` is not a dimension |
+
+Same question asked four times, different answers with stated reasons. More convincing
+than a schema where every low-cardinality column got a table.
+
+**Degenerate dimension** — a descriptive attribute kept on the fact table with no
+dimension behind it. Classic example is an invoice number: dimensional in nature, but
+it has no attributes of its own so there is nothing to join to. Here:
+`grade`, `sub_grade`, `home_ownership`, `verification_status`, `application_type`.
+
+---
+
+## Surrogate vs Natural Keys
+
+**Natural key** — a value that already identifies the row. `CA` for California.
+**Surrogate key** — a generated substitute, usually a hash or integer.
+
+**Use a natural key when it is already unique, stable, and readable.**
+`dim_geography` uses `state_code` directly. A surrogate there would add a lookup step
+to retrieve a value you already had.
+
+**Use a surrogate when the natural key is multiple columns.** `dim_loan_status` needs
+one, because after splitting policy status the natural key is
+`(loan_status, meets_credit_policy)` — `Fully Paid` appears twice. Without a surrogate
+every downstream join needs two conditions.
+
+```sql
+{{ dbt_utils.generate_surrogate_key(['loan_status', 'meets_credit_policy']) }}
+```
+
+**`dim_date` uses an integer `YYYYMMDD`.** Not for speed — a Snowflake `DATE` is
+already stored as an integer internally, so joining on a date is not string matching.
+The real arguments are convention (anyone reading the schema recognizes it) and
+readability inside the fact table. The cost: no arithmetic on the key, so the
+dimension also carries the real date.
+
+**Knowing when NOT to use a surrogate is the more valuable half.**
+
+---
+
+## Role-Playing Dimensions
+
+One physical dimension referenced multiple times for different purposes.
+
+`fct_loans` carries `issued_date_key`, `last_payment_date_key`, and
+`last_credit_pull_date_key` — all pointing at `dim_date`. Downstream you join three
+times with different aliases.
+
+**Carry all the role keys you have.** You can ignore a column later; you cannot join
+to a date you never carried.
+
+**Conformed dimension** — one shared by multiple fact tables. `dim_date` is the
+canonical example, which is why it was generated as a full daily calendar rather than
+derived from loan issue dates. Loans were issued monthly, but payment events land on
+arbitrary days. A dimension serving only one fact table is a lookup table with
+delusions.
+
+---
+
+## Seed vs Derived Dimension
+
+**The question is where the domain is defined.**
+
+**Seed** — when the domain is **externally defined**. 51 states exist whether or not
+you have loans in them. A state with zero loans still belongs in the dimension, or
+"loans by region" silently omits it from the denominator.
+
+**Derived from source** (`select distinct`) — when the domain **is whatever the source
+system emits**. Loan status has no external authority. A seed would silently drift
+from reality as the source adds statuses.
+
+**The tripwire for derived dimensions:** `not_null` on the mapped column. If a new
+status appears and falls through the CASE, it comes back null and fails the build
+instead of quietly landing in a mart.
+
+**Seeds also get tests.** A seed is hand-maintained, so a human can typo it. A
+duplicate `CA` caught at the seed is a duplicate that never fans out the fact table.
+
+---
+
+## One Column, Two Facts
+
+Lending Club encodes two independent facts in one string:
+
+```
+"Does not meet the credit policy. Status:Charged Off"
+```
+
+That is a status **plus** a policy exception. Left as-is, every "what is my charge-off
+rate" query has to remember two strings. Someone forgets, and the number is quietly
+wrong.
+
+**Split it.** `loan_status` + `meets_credit_policy` as separate columns. Now
+`where loan_status = 'Charged Off'` catches all 269,320 instead of missing 761.
+
+**General principle: when a source value encodes two facts, split it into two
+columns.**
+
+**And split it in the right layer.** The first version of this project normalized in
+the dimension, which forced `fct_loans` to reconstruct the original string just to
+join:
+
+```sql
+-- the smell
+on l.loan_status = case when s.meets_credit_policy then s.loan_status
+                        else 'Does not meet the credit policy. Status:' || s.loan_status end
+```
+
+Moving the split into `stg_loans` made the join two equality conditions. **An ugly
+join usually means the transformation happened in the wrong layer.**
+
+---
+
+## Refactoring
+
+**A refactor changes structure, not behavior.** After moving the status split from the
+dimension into staging, the verification was running the same grain check as before:
+
+```sql
+select count(*), count(distinct loan_id), count_if(loan_status_key is null)
+from fct_loans;
+```
+
+Same three numbers before and after = behavior preserved. **If the numbers change, it
+was not a refactor.**
+
+---
+
+## Two CTE Failure Modes
+
+**Unused CTE — silent.** Define `loans_only` but leave the next CTE reading
+`from source`. Compiles, runs, reports success, changes nothing. SQL does not warn
+about unused CTEs.
+
+**Undefined CTE — loud.** Reference `from normalized` after deleting that CTE.
+Immediate `Table 'NORMALIZED' not found`.
+
+**Loud is better.** SQL only warns you in one of these two directions, which is why
+the unused CTE is the more dangerous mistake. If a change appears to have had no
+effect, check that the new step is actually wired into the chain.

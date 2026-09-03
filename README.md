@@ -1,5 +1,7 @@
 # credit-stream
 
+📊 **[Browse the data model and lineage →](https://andrescamacho57.github.io/credit-stream/)**
+
 An end-to-end lending risk and payment monitoring platform on Snowflake and dbt.
 
 Loan-level data lands in S3, is loaded into Snowflake through an IAM-scoped external

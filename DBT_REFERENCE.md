@@ -736,3 +736,62 @@ Result: `1 model | 0 tests`. The build succeeded and tested nothing.
 **Tell:** the summary says 0 tests when you just wrote a YAML file.
 **Check:** `wc -l models/marts/_fct_loans.yml` — a `0` means empty.
 **Habit:** VS Code shows a filled dot instead of an X on tabs with unsaved changes.
+
+
+---
+
+## Documentation
+
+```bash
+dbt docs generate     # compile descriptions, tests, and lineage into a site
+dbt docs serve        # local web server, Ctrl+C to stop
+```
+
+Output lands in `target/`. It is a **static site** — no server logic — so it can be
+hosted anywhere that serves files.
+
+**The descriptions in your `.yml` files are what populate it.** Writing a real
+description on every model and column is not busywork; it is the documentation site.
+
+**Publishing to GitHub Pages:**
+
+1. Repo → Settings → Pages → Source: **GitHub Actions** (not "Deploy from a branch")
+2. A workflow that runs `dbt docs generate`, then `actions/upload-pages-artifact`
+   pointed at `dbt/target`, then `actions/deploy-pages`
+
+**The `permissions:` block is the part most people miss:**
+```yaml
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+```
+Without `pages: write` and `id-token: write` the deploy step fails.
+
+**Trigger on push to `main`, not on pull requests** — docs should reflect what is
+merged.
+
+**Caveat:** publishing `target/` exposes compiled SQL and any stored test failures
+alongside the docs. Not sensitive in this project, but worth knowing before pointing
+it at a corporate warehouse.
+
+**Two workflows, different triggers:** `dbt_ci.yml` runs on PRs and gates merges;
+`dbt_docs.yml` runs on push to `main` and publishes. Same secrets, same setup steps,
+different jobs.
+
+---
+
+## When Incremental Is Wrong
+
+Incremental materialization exists so you do not reprocess data that has not changed.
+
+**`fct_loans` is deliberately not incremental.** The source is a static historical file
+that will never receive another row. An incremental model there would carry
+`is_incremental()` logic that no run ever exercises — a pattern added because it is
+expected rather than because the problem calls for it.
+
+**Incremental belongs on the payment fact**, where events genuinely arrive over time,
+accumulate, and should not be reprocessed from scratch.
+
+**Same judgment as dropping `dim_loan_grade`.** Being able to say why you did *not*
+use a pattern is worth more than using it everywhere.

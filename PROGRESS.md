@@ -138,6 +138,20 @@ splitting columns that encode two facts, refactoring discipline
 **Concepts:** CI/CD, branches and pull requests, GitHub Actions, runners and VMs,
 secrets management, environment isolation, "works on my machine"
 
+### Day 6 — 2026-09-02: Docs published
+
+- dbt docs generated and published to GitHub Pages via a second workflow
+- Site live at https://andrescamacho57.github.io/credit-stream/
+- README links to it; test count (54) added
+- **Decided against making fct_loans incremental** — the loan source is a static
+  historical file that will never receive another row, so an incremental model
+  there would never actually run incrementally. Recorded in the roadmap as a
+  decision rather than a gap. Incremental belongs on the payment fact.
+- .DS_Store gitignored after committing it by accident
+
+**Concepts:** dbt docs, GitHub Pages deployment, workflow permissions,
+when incremental materialization is the wrong pattern
+
 
 
 

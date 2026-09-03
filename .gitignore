@@ -220,6 +220,8 @@ __marimo__/
 # Data files - belong in S3, not Git
 *.csv
 !smoke_test.csv
+!dbt/seeds/*.csv
+
 
 # Personal study notes - not for public repo
 INTERVIEW_ANSWERS.md

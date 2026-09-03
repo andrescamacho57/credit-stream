@@ -233,3 +233,6 @@ dbt_packages/
 
 # Personal scratchpad
 scratch.sql
+
+# macOS
+.DS_Store

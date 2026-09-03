@@ -871,3 +871,120 @@ Immediate `Table 'NORMALIZED' not found`.
 **Loud is better.** SQL only warns you in one of these two directions, which is why
 the unused CTE is the more dangerous mistake. If a change appears to have had no
 effect, check that the new step is actually wired into the chain.
+
+
+---
+
+## CI/CD
+
+**CI (Continuous Integration)** — every push triggers an automated build and test run,
+so breakage is caught before it reaches the main branch.
+
+**CD (Continuous Deployment)** — if CI passes, the change deploys automatically.
+
+This project has CI only. CD would mean auto-running dbt against a production schema
+on merge.
+
+**What actually changes is WHEN problems are caught.** Before: after committing, if you
+remember to run a build. After: automatically, on the branch, before anything merges.
+`main` becomes a place where tests are *known* to pass rather than assumed to.
+
+**GitHub Actions** — GitHub's automation service. It watches the repo for events, reads
+workflow files from `.github/workflows/`, and executes them.
+
+**Workflow** — a YAML file describing triggers and steps. The recipe.
+
+**Runner** — the machine that executes the steps. GitHub provides them free, spins one
+up per run, destroys it after.
+
+**VM (virtual machine)** — software pretending to be a computer. One physical server
+hosts many isolated VMs, each with its own OS and filesystem, unaware of the others.
+
+**Nothing persists between runs.** A fresh Ubuntu VM has no dbt, no `profiles.yml`, no
+private key. The workflow installs and writes all of it every time — which is also why
+CI is a genuine test of reproducibility.
+
+---
+
+## Branches and Pull Requests
+
+**A branch is a separate line of commits.** Creating one gives you a pointer starting
+at the same place as `main` that then moves independently.
+
+**The point:** build something half-finished, commit to it repeatedly, and `main` stays
+untouched and working. If the idea turns out badly, delete the branch — nothing was
+harmed.
+
+**Why it is the standard workflow:** `main` is what gets deployed, what others clone,
+what CI protects. You do not experiment there.
+
+```
+branch → commit → push → open PR → CI runs → review → merge → delete branch
+```
+
+**Pull request** — a request to merge one branch into another, plus a place for CI
+results and review discussion. Pushing to a branch with an open PR **automatically
+re-runs CI**.
+
+**A PR description explains WHY.** The diff already shows what.
+
+**Naming convention:** `feature/`, `fix/`, `chore/` prefixes.
+
+---
+
+## Secrets
+
+Credentials cannot live in a workflow file — it is committed to a public repository.
+
+**GitHub Secrets** are encrypted values stored on the repo. A workflow references one
+with `${{ secrets.NAME }}`; the value is masked in logs and cannot be read back out,
+even by you.
+
+Used here: `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_ROLE`, and
+`SNOWFLAKE_PRIVATE_KEY`.
+
+**This is where key pair authentication pays off.** A CI runner is a fresh Linux VM
+with no browser and no human — it cannot complete MFA. Key pair is the only mechanism
+that works for automation, which is why it was set up on day two rather than a
+password.
+
+---
+
+## Environment Isolation
+
+Three schemas in one database, selected by the `target:` in `profiles.yml`:
+
+| Schema | Used by |
+|---|---|
+| `raw` | the S3 landing zone, never written by dbt |
+| `dbt_andres` | local development |
+| `dbt_ci` | CI runs |
+
+**Why separate:** if CI wrote into `dbt_andres`, a workflow run would clobber
+in-progress models mid-edit, and local builds would fail CI's tests for reasons
+unrelated to the PR.
+
+Real teams extend the same pattern — a personal schema per developer, one for CI, one
+for production.
+
+---
+
+## "Works On My Machine"
+
+**The first CI run failed, and it caught a repo that was broken for everyone except
+its author.**
+
+`dim_geography` referenced a seed that was not in the repository. The root `.gitignore`
+had `*.csv` with an exception only for `smoke_test.csv`, so `git add` had silently
+skipped `state_regions.csv`. Locally everything worked — the file was on disk. Anyone
+cloning the repo would have hit `Ref 'state_regions' not found in project`.
+
+**Nothing would have revealed this without CI.** Not a local build, not a passing test
+suite, not code review. Only a fresh machine with nothing but what is committed.
+
+**The general lesson: a green local build proves your machine works, not that your
+repository does.** This is the same shape as "green pipeline ≠ correct data" — the
+check has to run somewhere your assumptions do not.
+
+**`git check-ignore -v <path>`** names which rule in which file is excluding a path.
+The tool for "why is Git not tracking this?"

@@ -256,3 +256,143 @@ are almost always at the top.
 **When a command rejects your arguments, read `--help` before searching.** It is
 authoritative for the exact version installed on your machine. Syntax changes between
 major versions, and tutorials go stale.
+
+---
+
+## Heredocs — Writing Files From the Terminal
+
+```bash
+cat > models/staging/stg_loans.sql << 'EOF'
+with source as (
+    select * from {{ source('raw', 'accepted_loans') }}
+)
+select * from source
+
+
+---
+
+## Heredocs — Writing Files From the Terminal
+
+```bash
+cat > models/staging/stg_loans.sql << 'HEREDOC_END'
+with source as (
+    select * from raw_table
+)
+select * from source
+HEREDOC_END
+```
+
+- `cat > file` — redirect into the file, **overwriting** it
+- `cat >> file` — **append** instead
+- `<< 'WORD'` — a **heredoc**: everything until a line containing only `WORD` becomes
+  the input
+- **Quote the delimiter** to stop the shell interpreting `$`, backticks, or Jinja
+  braces inside the content
+
+**Why bother when you have an editor:** no save step to forget. If an edit
+mysteriously has no effect, an unsaved editor buffer is the first suspect — writing
+straight to disk removes that failure mode entirely.
+
+`EOF` is the conventional delimiter but any word works. **Gotcha:** if the content
+itself contains the delimiter word, the heredoc ends early. Use a distinctive
+delimiter when writing files that contain heredocs.
+
+---
+
+## Verifying an Edit Landed
+
+```bash
+grep "from loans_only" models/staging/stg_loans.sql
+```
+
+`grep` prints matching lines and stays silent when there are none. A quick way to
+confirm a specific change is really in the file — faster than reading the whole thing.
+
+Useful companions:
+```bash
+cat file          # see the whole thing
+ls -la folder     # check file sizes; 0 means empty
+head -3 file      # top
+tail -3 file      # bottom
+```
+
+**When something behaves as if your change did not happen, verify the file on disk
+before debugging anything else.** Unsaved buffers, edits appended to the wrong place,
+and empty files account for most of these.
+
+---
+
+## Two Languages, Two Places
+
+| Runs in the terminal | Runs in Snowflake |
+|---|---|
+| `dbt run`, `dbt test`, `dbt build` | `select`, `create table`, `copy into` |
+| `git`, `ls`, `cd`, `cat`, `grep` | anything SQL |
+
+Pasting SQL into the shell gives `zsh: parse error near ...`. Easy mix-up with two
+panes open — SQL goes in a `.sql` file and runs via the Snowflake extension play
+button.
+
+
+---
+
+## Git — Branches and Pull Requests
+
+| Command | Does |
+|---|---|
+| `git branch` | list branches; `*` marks current |
+| `git checkout -b feature/name` | create a branch and switch to it |
+| `git checkout main` | switch to an existing branch |
+| `git push -u origin branch-name` | push a new branch and link it to the remote |
+| `git push` | after linking, this is enough |
+| `git pull` | fetch and merge the remote's commits |
+| `git branch -d branch-name` | delete a merged branch (refuses if unmerged) |
+| `git branch -D branch-name` | delete regardless — no safety net |
+
+**The full loop:**
+```bash
+git checkout -b feature/add-ci      # branch
+# ... edit files ...
+git add .
+git commit -m "Add CI workflow"
+git push -u origin feature/add-ci   # first push creates the remote branch
+# ... open PR on GitHub, CI runs, merge ...
+git checkout main
+git pull                            # bring the merged commits down
+git branch -d feature/add-ci        # clean up
+```
+
+**`-u origin branch` is only needed on the first push.** After that the branch is
+linked and plain `git push` works.
+
+---
+
+## Git — Diagnostics
+
+| Command | Does |
+|---|---|
+| `git check-ignore -v <path>` | which `.gitignore` rule is excluding this file |
+| `git show --stat HEAD` | files changed in the last commit |
+| `git log --oneline` | compact history |
+| `git ls-files \| grep NAME` | is Git currently tracking this file |
+| `diff fileA fileB` | compare two files; silence means identical |
+
+**`git check-ignore -v` is the tool for "why is Git not tracking this?"** It names the
+file and line number of the rule doing it.
+
+---
+
+## The Pager
+
+Git pipes list-like output through `less`. You will land in a screen full of `~` with
+`(END)` at the bottom.
+
+**Press `q` to quit.** Space scrolls, `/` searches.
+
+Turn it off for a specific command:
+```bash
+git config --global pager.branch false
+```
+
+**`--no-pager` is a flag on `git`, not on the subcommand** — `git --no-pager branch`,
+not `git branch --no-pager`.

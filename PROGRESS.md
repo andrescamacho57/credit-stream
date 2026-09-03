@@ -121,7 +121,22 @@ structure, unused-CTE no-op, display vs analytical values, heredocs
 natural keys, role-playing and conformed dimensions, seed vs derived domains,
 splitting columns that encode two facts, refactoring discipline
 
+### Day 5 — 2026-08-31: README and CI/CD
 
+- README with Mermaid architecture and ERD diagrams, tool choices and tradeoffs,
+  data quality findings, and known limitations
+- First use of branches and pull requests — `feature/add-ci`
+- GitHub Actions workflow: dbt deps, debug, and build on every PR into main
+- Credentials as GitHub Secrets; key pair auth verified working from a fresh
+  Ubuntu runner
+- Separate `dbt_ci` schema so CI and local dev cannot collide
+- **CI caught a real bug on its first run**: the root .gitignore `*.csv` rule had
+  silently excluded the state_regions seed, so the repo was broken for anyone
+  cloning it. Local builds could never have found this.
+- Fixed with a negation rule, pushed, CI re-ran green, merged
+
+**Concepts:** CI/CD, branches and pull requests, GitHub Actions, runners and VMs,
+secrets management, environment isolation, "works on my machine"
 
 
 

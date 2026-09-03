@@ -192,6 +192,7 @@ loans. It is split in staging into `loan_status` and `meets_credit_policy`.
 ## Testing
 
 Every model carries a contract enforced on each build:
+**54 tests across 6 models, 1 source, and 1 seed.**
 
 - **Grain tests** — `unique` + `not_null` on every key
 - **Referential integrity** — `relationships` tests on all six foreign keys, including
@@ -265,7 +266,10 @@ Not yet built. Listed for shape, not claimed as done.
 - **CI/CD** — GitHub Actions running `dbt build` and `sqlfluff` on every pull request
 - **Payment event stream** — a generator seeded from real loan outcomes, so loans that
   actually charged off receive deteriorating payment patterns
-- **Snowflake Streams + Tasks** — incremental processing of payment events
+- **Snowflake Streams + Tasks** — incremental processing of payment events.
+  Incremental materialization belongs here rather than on `fct_loans`: the loan
+  source is a static historical file that will never receive another row, so an
+  incremental model there would never actually run incrementally.
 - **Anomaly view** — the signal is not "multiple payments in a cycle," which is
   ambiguous; it is **multiple payments summing to less than the required installment.**
   Someone paying $180 twice against a $400 obligation is failing to meet it. Someone

@@ -339,3 +339,137 @@ SHOW USERS;
 SHOW ROLES;
 SHOW WAREHOUSES;
 ```
+
+
+---
+
+## Schemas In This Project
+
+```
+CREDIT_STREAM
+├── RAW          -- S3 landing zone. Immutable. dbt never writes here.
+├── DBT_ANDRES   -- local development target
+└── DBT_CI       -- GitHub Actions target
+```
+
+Selected by the `target:` block in `profiles.yml`. Separate schemas mean a CI run
+cannot clobber in-progress local models, and local state cannot make a PR fail for
+unrelated reasons.
+
+```sql
+SHOW SCHEMAS IN DATABASE credit_stream;
+```
+
+Real teams extend the same pattern: one schema per developer, one for CI, one for
+production.
+
+---
+
+## SQL Patterns Used In This Project
+
+### Validating a load
+
+```sql
+-- count(*) counts rows; count(col) counts NON-NULL values.
+-- The gap between them is the null count, no WHERE needed.
+select
+    count(*)              as total_rows,
+    count(loan_amnt)      as amount_populated,
+    count(emp_length)     as emp_length_populated
+from credit_stream.raw.accepted_loans;
+```
+
+Run the same shape against the source and the transformed model, then compare column
+by column. Matching numbers mean the transformation destroyed nothing. A gap separates
+"already null in the source" from "my cast silently broke it."
+
+### count_if
+
+```sql
+select
+    count_if(try_cast(id as number) is null)  as non_numeric_id,
+    count_if(loan_amnt is null)               as null_amount
+from credit_stream.raw.accepted_loans;
+```
+
+Counts rows where a condition is true. Cleaner than
+`sum(case when ... then 1 else 0 end)`.
+
+**Use it to measure a filter's blast radius before applying it.** If the count differs
+from what you expect to remove, there is a category of data you have not looked at.
+
+### Percentage of total with a window function
+
+```sql
+select
+    purpose,
+    count(*)                                            as loan_count,
+    round(100.0 * count(*) / sum(count(*)) over (), 2)  as pct_of_loans
+from credit_stream.dbt_andres.stg_loans
+group by purpose
+order by loan_count desc;
+```
+
+`sum(count(*)) over ()` is a window over the entire result set — it puts the grand
+total on every row, so you get a percentage without a second pass.
+
+### Finding orphans (anti-join)
+
+```sql
+select l.state_code, count(*) as loan_count
+from credit_stream.dbt_andres.stg_loans l
+left join credit_stream.dbt_andres.dim_geography g
+    on l.state_code = g.state_key
+where g.state_key is null
+group by l.state_code;
+```
+
+**Left join, then filter for nulls on the right.** Finds rows in the left table with no
+match. The standard "what is missing" query — and the mechanism behind dbt's
+`relationships` test.
+
+### Column metadata from the catalog
+
+```sql
+select count(*) as column_count
+from credit_stream.information_schema.columns
+where table_schema = 'DBT_ANDRES'
+  and table_name = 'STG_LOANS';
+```
+
+`information_schema` is the authoritative source for structure. Better than counting
+lines in a SQL file with `grep`, which also matches comments and CTE definitions.
+
+---
+
+## Useful Functions
+
+| Function | Does |
+|---|---|
+| `try_cast(x as type)` | cast, returning null instead of erroring |
+| `try_to_date(x, 'MON-YYYY')` | parse a date, null on failure |
+| `regexp_substr(term, '[0-9]+')` | first run of digits — `" 36 months"` → `"36"` |
+| `split_part(s, 'Status:', 2)` | split on a delimiter, take the Nth piece |
+| `initcap(replace(s, '_', ' '))` | `debt_consolidation` → `Debt Consolidation` |
+| `to_char(d, 'YYYYMMDD')` | date → string, for building integer date keys |
+| `date_trunc('month', d)` | first day of the month |
+| `last_day(d, 'month')` | last day of the month |
+| `dayofweek` / `dayname` / `monthname` / `weekofyear` | date parts |
+
+**`try_cast` fails silently** — it can null out a whole column and still report success.
+Pair permissive casting with a null-count check and a `not_null` test.
+
+---
+
+## Snowflake Notes Learned The Hard Way
+
+**A DATE is stored internally as an integer** (days since an epoch). Joining on a date
+column is an integer comparison, not string matching. So "integer date keys are faster"
+is not the real argument for `YYYYMMDD` — convention and readability are.
+
+**`show tables in credit_stream;` fails** — `SHOW TABLES IN` needs a schema, or use
+`SHOW TABLES IN DATABASE credit_stream`.
+
+**Diagnostics do not belong in setup scripts.** `SELECT CURRENT_REGION()` and
+`DESC INTEGRATION` answer questions; they do not create state. Keeping them in a
+numbered setup file makes it unclear what is essential.
